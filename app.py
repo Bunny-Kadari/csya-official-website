@@ -290,6 +290,31 @@ def ann_add():
 def ann_del(id):
     c=db(); execute(c,'DELETE FROM announcements WHERE id=%s' if DATABASE_URL else 'DELETE FROM announcements WHERE id=?',(id,)); c.commit(); c.close(); return redirect(url_for('admin_dash')+'#announcements')
 
+@app.route('/members')
+def members_page():
+    c=db(); members=execute(c,'SELECT * FROM members ORDER BY sort_order,id DESC').fetchall(); c.close()
+    return render_template('collection.html', kind='members', title='Our Committee', eyebrow='THE PEOPLE BEHIND THE MEMORIES', intro='Every member, every role, every chapter — all in one place.', items=members)
+
+@app.route('/memories')
+def memories_page():
+    c=db(); albums=execute(c,'SELECT * FROM albums ORDER BY year DESC,id DESC').fetchall(); years=sorted({str(a['year']) for a in albums if a['year']}, reverse=True); c.close()
+    return render_template('memories.html', albums=albums, years=years)
+
+@app.route('/events')
+def events_page():
+    c=db(); events=execute(c,'SELECT * FROM events ORDER BY date DESC,id DESC').fetchall(); c.close()
+    return render_template('collection.html', kind='events', title='Our Events', eyebrow='CELEBRATIONS & ACTIVITIES', intro='Every celebration and activity, preserved as part of our journey.', items=events)
+
+@app.route('/achievements')
+def achievements_page():
+    c=db(); items=execute(c,'SELECT * FROM achievements ORDER BY year DESC,id DESC').fetchall(); c.close()
+    return render_template('collection.html', kind='achievements', title='Our Achievements', eyebrow='PRIDE & PURPOSE', intro='Milestones that made our association stronger and our village prouder.', items=items)
+
+@app.route('/videos')
+def videos_page():
+    c=db(); items=execute(c,'SELECT * FROM videos ORDER BY year DESC,id DESC').fetchall(); c.close()
+    return render_template('collection.html', kind='videos', title='Our Videos', eyebrow='WATCH & REMEMBER', intro='Watch the moments that deserve to be remembered again and again.', items=items)
+
 @app.route('/gallery/<int:album_id>')
 def gallery(album_id):
     c=db(); album=execute(c,'SELECT * FROM albums WHERE id=%s' if DATABASE_URL else 'SELECT * FROM albums WHERE id=?',(album_id,)).fetchone(); photos=execute(c,'SELECT * FROM photos WHERE album_id=%s ORDER BY id DESC' if DATABASE_URL else 'SELECT * FROM photos WHERE album_id=? ORDER BY id DESC',(album_id,)).fetchall(); c.close()
