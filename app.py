@@ -35,7 +35,14 @@ DEFAULT = {
     'instagram': 'https://ig.me/j/AbZKptGF-2YTw4SS/', 'facebook': '', 'youtube': '', 'email': '',
     'about': 'Since 2000, our association has brought together youth, families and friends through devotion, unity, culture and community service in Kondapalkala.',
     'hero_title': '25+ Years of Unity, Devotion & Memories',
-    'hero_sub': 'Celebrating our Ganesh traditions, our people and every beautiful chapter of our journey.'
+    'hero_sub': 'Celebrating our Ganesh traditions, our people and every beautiful chapter of our journey.',
+    'hero_image': '', 'ganesh_image': '',
+    'ganesh_eyebrow': 'OUR GANESH • OUR FAITH',
+    'ganesh_title': 'Every year,\na new memory.',
+    'ganesh_text': 'From the first decoration to the final visarjan, every celebration carries the spirit of our people. This space keeps those moments alive for generations.',
+    'location': 'Kondapalkala\nManakondur Mandal\nKarimnagar District',
+    'site_title': 'CHATRAPATI SHIVAJI YOUTH ASSOCIATION',
+    'footer_text': '© 2000–2026 CSYA • Built for our memories, our people & our future.'
 }
 
 CLOUDINARY_CONFIGURED = bool(os.getenv('CLOUDINARY_CLOUD_NAME') and os.getenv('CLOUDINARY_API_KEY') and os.getenv('CLOUDINARY_API_SECRET'))
@@ -148,6 +155,25 @@ def del_file(name):
             os.remove(p)
 
 
+def save_setting(k, v):
+    c = db()
+    if DATABASE_URL:
+        execute(c, 'INSERT INTO settings(k,v) VALUES(%s,%s) ON CONFLICT(k) DO UPDATE SET v=EXCLUDED.v', (k, v))
+    else:
+        execute(c, 'INSERT INTO settings(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v', (k, v))
+    c.commit(); c.close()
+
+
+def row_by(table, id):
+    c = db()
+    row = execute(c, f'SELECT * FROM {table} WHERE id=%s' if DATABASE_URL else f'SELECT * FROM {table} WHERE id=?', (id,)).fetchone()
+    c.close(); return row
+
+
+def delete_row(table, id):
+    c = db(); execute(c, f'DELETE FROM {table} WHERE id=%s' if DATABASE_URL else f'DELETE FROM {table} WHERE id=?', (id,)); c.commit(); c.close()
+
+
 @app.context_processor
 def inject():
     return {'site': settings(), 'media_url': media_url, 'admin_name': ADMIN_NAME}
@@ -193,7 +219,8 @@ def admin_dash():
         'events': execute(c, 'SELECT * FROM events ORDER BY date DESC,id DESC').fetchall(),
         'achievements': execute(c, 'SELECT * FROM achievements ORDER BY year DESC,id DESC').fetchall(),
         'videos': execute(c, 'SELECT * FROM videos ORDER BY year DESC,id DESC').fetchall(),
-        'announcements': execute(c, 'SELECT * FROM announcements ORDER BY id DESC').fetchall()
+        'announcements': execute(c, 'SELECT * FROM announcements ORDER BY id DESC').fetchall(),
+        'photos': execute(c, 'SELECT p.*,a.title album_title,a.year FROM photos p LEFT JOIN albums a ON a.id=p.album_id ORDER BY p.id DESC').fetchall()
     }
     c.close()
     return render_template('admin.html', counts=counts, **rows)
@@ -203,14 +230,23 @@ def admin_dash():
 @admin
 def save_settings():
     allowed = set(DEFAULT) | {'site_title'}
+    old = settings()
     c = db()
-    for k, v in request.form.items():
-        if k in allowed:
+    for k in allowed:
+        if k in request.form:
+            v = request.form.get(k, '').strip()
             if DATABASE_URL:
-                execute(c, 'INSERT INTO settings(k,v) VALUES(%s,%s) ON CONFLICT(k) DO UPDATE SET v=EXCLUDED.v', (k, v.strip()))
+                execute(c, 'INSERT INTO settings(k,v) VALUES(%s,%s) ON CONFLICT(k) DO UPDATE SET v=EXCLUDED.v', (k, v))
             else:
-                execute(c, 'INSERT INTO settings(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v', (k, v.strip()))
-    c.commit(); c.close(); flash('Website settings updated.', 'ok'); return redirect(url_for('admin_dash') + '#settings')
+                execute(c, 'INSERT INTO settings(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v', (k, v))
+    c.commit(); c.close()
+    for field, key, folder in [('hero_image','hero_image','csya/site'), ('ganesh_image','ganesh_image','csya/site')]:
+        uploaded = save_upload(field, folder)
+        if uploaded:
+            save_setting(key, uploaded)
+            if old.get(key): del_file(old.get(key))
+    flash('Website settings updated.', 'ok')
+    return redirect(url_for('admin_dash') + '#settings')
 
 
 @app.post('/admin/member')
@@ -226,11 +262,29 @@ def member_add():
 def member_del(id):
     c=db(); r=execute(c,'SELECT photo FROM members WHERE id=%s' if DATABASE_URL else 'SELECT photo FROM members WHERE id=?',(id,)).fetchone(); execute(c,'DELETE FROM members WHERE id=%s' if DATABASE_URL else 'DELETE FROM members WHERE id=?',(id,)); c.commit(); c.close(); del_file(r['photo'] if r else ''); return redirect(url_for('admin_dash')+'#members')
 
+@app.post('/admin/member/<int:id>/edit')
+@admin
+def member_edit(id):
+    old=row_by('members', id); p=save_upload('photo','csya/members') or (old['photo'] if old else '')
+    c=db(); params=(request.form['name'],request.form.get('role',''),request.form.get('year',''),request.form.get('bio',''),p,int(request.form.get('sort_order',0) or 0),id)
+    execute(c,'UPDATE members SET name=%s,role=%s,year=%s,bio=%s,photo=%s,sort_order=%s WHERE id=%s' if DATABASE_URL else 'UPDATE members SET name=?,role=?,year=?,bio=?,photo=?,sort_order=? WHERE id=?',params); c.commit(); c.close()
+    if old and p != old['photo'] and old['photo']: del_file(old['photo'])
+    flash('Member updated.', 'ok'); return redirect(url_for('admin_dash')+'#members')
+
 @app.post('/admin/album')
 @admin
 def album_add():
     p=save_upload('cover','csya/albums'); c=db(); params=(request.form['title'],request.form.get('year',''),request.form.get('category','Memories'),request.form.get('description',''),p,datetime.now().isoformat(timespec='seconds'))
     execute(c,'INSERT INTO albums(title,year,category,description,cover,created_at) VALUES(%s,%s,%s,%s,%s,%s)' if DATABASE_URL else 'INSERT INTO albums(title,year,category,description,cover,created_at) VALUES(?,?,?,?,?,?)',params); c.commit(); c.close(); return redirect(url_for('admin_dash')+'#albums')
+
+@app.post('/admin/album/<int:id>/edit')
+@admin
+def album_edit(id):
+    old=row_by('albums', id); p=save_upload('cover','csya/albums') or (old['cover'] if old else '')
+    c=db(); params=(request.form['title'],request.form.get('year',''),request.form.get('category','Memories'),request.form.get('description',''),p,id)
+    execute(c,'UPDATE albums SET title=%s,year=%s,category=%s,description=%s,cover=%s WHERE id=%s' if DATABASE_URL else 'UPDATE albums SET title=?,year=?,category=?,description=?,cover=? WHERE id=?',params); c.commit(); c.close()
+    if old and p != old['cover'] and old['cover']: del_file(old['cover'])
+    flash('Album updated.', 'ok'); return redirect(url_for('admin_dash')+'#albums')
 
 @app.post('/admin/album/<int:id>/photo')
 @admin
@@ -240,6 +294,22 @@ def photo_add(id):
         c=db(); params=(id,request.form.get('title',''),request.form.get('caption',''),p,datetime.now().isoformat(timespec='seconds'))
         execute(c,'INSERT INTO photos(album_id,title,caption,file,created_at) VALUES(%s,%s,%s,%s,%s)' if DATABASE_URL else 'INSERT INTO photos(album_id,title,caption,file,created_at) VALUES(?,?,?,?,?)',params); c.commit(); c.close()
     return redirect(url_for('admin_dash')+'#albums')
+
+@app.post('/admin/photo/<int:id>/edit')
+@admin
+def photo_edit(id):
+    old=row_by('photos', id); p=save_upload('photo','csya/photos') or (old['file'] if old else '')
+    c=db(); params=(request.form.get('title',''),request.form.get('caption',''),p,id)
+    execute(c,'UPDATE photos SET title=%s,caption=%s,file=%s WHERE id=%s' if DATABASE_URL else 'UPDATE photos SET title=?,caption=?,file=? WHERE id=?',params); c.commit(); c.close()
+    if old and p != old['file'] and old['file']: del_file(old['file'])
+    flash('Photo updated.', 'ok'); return redirect(url_for('admin_dash')+'#photos')
+
+@app.post('/admin/photo/<int:id>/delete')
+@admin
+def photo_del(id):
+    old=row_by('photos', id); delete_row('photos', id)
+    if old and old['file']: del_file(old['file'])
+    flash('Photo deleted.', 'ok'); return redirect(url_for('admin_dash')+'#photos')
 
 @app.post('/admin/album/<int:id>/delete')
 @admin
@@ -252,6 +322,15 @@ def event_add():
     p=save_upload('photo','csya/events'); c=db(); params=(request.form['title'],request.form.get('date',''),request.form.get('location',''),request.form.get('description',''),p)
     execute(c,'INSERT INTO events(title,date,location,description,photo) VALUES(%s,%s,%s,%s,%s)' if DATABASE_URL else 'INSERT INTO events(title,date,location,description,photo) VALUES(?,?,?,?,?)',params); c.commit(); c.close(); return redirect(url_for('admin_dash')+'#events')
 
+@app.post('/admin/event/<int:id>/edit')
+@admin
+def event_edit(id):
+    old=row_by('events', id); p=save_upload('photo','csya/events') or (old['photo'] if old else '')
+    c=db(); params=(request.form['title'],request.form.get('date',''),request.form.get('location',''),request.form.get('description',''),p,id)
+    execute(c,'UPDATE events SET title=%s,date=%s,location=%s,description=%s,photo=%s WHERE id=%s' if DATABASE_URL else 'UPDATE events SET title=?,date=?,location=?,description=?,photo=? WHERE id=?',params); c.commit(); c.close()
+    if old and p != old['photo'] and old['photo']: del_file(old['photo'])
+    flash('Event updated.', 'ok'); return redirect(url_for('admin_dash')+'#events')
+
 @app.post('/admin/event/<int:id>/delete')
 @admin
 def event_del(id):
@@ -262,6 +341,15 @@ def event_del(id):
 def ach_add():
     p=save_upload('photo','csya/achievements'); c=db(); params=(request.form['title'],request.form.get('year',''),request.form.get('description',''),p)
     execute(c,'INSERT INTO achievements(title,year,description,photo) VALUES(%s,%s,%s,%s)' if DATABASE_URL else 'INSERT INTO achievements(title,year,description,photo) VALUES(?,?,?,?)',params); c.commit(); c.close(); return redirect(url_for('admin_dash')+'#achievements')
+
+@app.post('/admin/achievement/<int:id>/edit')
+@admin
+def ach_edit(id):
+    old=row_by('achievements', id); p=save_upload('photo','csya/achievements') or (old['photo'] if old else '')
+    c=db(); params=(request.form['title'],request.form.get('year',''),request.form.get('description',''),p,id)
+    execute(c,'UPDATE achievements SET title=%s,year=%s,description=%s,photo=%s WHERE id=%s' if DATABASE_URL else 'UPDATE achievements SET title=?,year=?,description=?,photo=? WHERE id=?',params); c.commit(); c.close()
+    if old and p != old['photo'] and old['photo']: del_file(old['photo'])
+    flash('Achievement updated.', 'ok'); return redirect(url_for('admin_dash')+'#achievements')
 
 @app.post('/admin/achievement/<int:id>/delete')
 @admin
@@ -274,6 +362,15 @@ def video_add():
     p=save_upload('thumbnail','csya/videos'); c=db(); params=(request.form['title'],request.form['url'],request.form.get('year',''),request.form.get('description',''),p)
     execute(c,'INSERT INTO videos(title,url,year,description,thumbnail) VALUES(%s,%s,%s,%s,%s)' if DATABASE_URL else 'INSERT INTO videos(title,url,year,description,thumbnail) VALUES(?,?,?,?,?)',params); c.commit(); c.close(); return redirect(url_for('admin_dash')+'#videos')
 
+@app.post('/admin/video/<int:id>/edit')
+@admin
+def video_edit(id):
+    old=row_by('videos', id); p=save_upload('thumbnail','csya/videos') or (old['thumbnail'] if old else '')
+    c=db(); params=(request.form['title'],request.form['url'],request.form.get('year',''),request.form.get('description',''),p,id)
+    execute(c,'UPDATE videos SET title=%s,url=%s,year=%s,description=%s,thumbnail=%s WHERE id=%s' if DATABASE_URL else 'UPDATE videos SET title=?,url=?,year=?,description=?,thumbnail=? WHERE id=?',params); c.commit(); c.close()
+    if old and p != old['thumbnail'] and old['thumbnail']: del_file(old['thumbnail'])
+    flash('Video updated.', 'ok'); return redirect(url_for('admin_dash')+'#videos')
+
 @app.post('/admin/video/<int:id>/delete')
 @admin
 def video_del(id):
@@ -284,6 +381,13 @@ def video_del(id):
 def ann_add():
     c=db(); params=(request.form['title'],request.form['text'],datetime.now().isoformat(timespec='seconds'))
     execute(c,'INSERT INTO announcements(title,text,active,created_at) VALUES(%s,%s,1,%s)' if DATABASE_URL else 'INSERT INTO announcements(title,text,active,created_at) VALUES(?,?,1,?)',params); c.commit(); c.close(); return redirect(url_for('admin_dash')+'#announcements')
+
+@app.post('/admin/announcement/<int:id>/edit')
+@admin
+def ann_edit(id):
+    c=db(); params=(request.form['title'],request.form['text'],int(request.form.get('active',1) or 0),id)
+    execute(c,'UPDATE announcements SET title=%s,text=%s,active=%s WHERE id=%s' if DATABASE_URL else 'UPDATE announcements SET title=?,text=?,active=? WHERE id=?',params); c.commit(); c.close()
+    flash('Announcement updated.', 'ok'); return redirect(url_for('admin_dash')+'#announcements')
 
 @app.post('/admin/announcement/<int:id>/delete')
 @admin
